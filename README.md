@@ -47,6 +47,10 @@ Clients should branch on `code`, not on the message.
 per purchase attempt. Confirm and cancel are idempotent: repeating them returns `200` with the
 same result. See [Idempotency](#idempotency-double-requests).
 
+**Postman:** import `postman/inventory-reservation.postman_collection.json`. Run the folders in
+order; each request saves the ids it creates for the next one. To try expiry without waiting
+2 minutes, start the server with `RESERVATION_HOLD_SECONDS=20 npm run start:dev`.
+
 ```bash
 # Create a product with one unit
 curl -s -XPOST localhost:3000/products -H 'content-type: application/json' \
