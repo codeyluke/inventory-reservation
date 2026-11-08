@@ -1,4 +1,9 @@
-import { InvalidArgumentError, InvalidQuantityError } from './errors';
+import {
+  InvalidArgumentError,
+  InvalidQuantityError,
+  InvalidReservationStateError,
+  ReservationExpiredError,
+} from './errors';
 
 export enum ReservationStatus {
   Active = 'ACTIVE',
@@ -27,7 +32,23 @@ export interface CreateReservationProps {
   holdDurationMs: number;
 }
 
-/** A temporary hold on stock for one user. */
+/**
+ * A temporary hold on stock for one user.
+ *
+ *   ACTIVE ──confirm──▶ CONFIRMED   (final: purchases cannot be reversed)
+ *     │ ├───cancel───▶ CANCELLED
+ *     │ └───expire───▶ EXPIRED     (hold window elapsed)
+ *
+ * The deadline is enforced by the entity itself: once `now >= expiresAt` an
+ * ACTIVE reservation can no longer be confirmed or cancelled, even if the
+ * background sweeper has not marked it EXPIRED yet. Stock bookkeeping lives
+ * on Product; the service applies both changes together.
+ *
+ * confirm and cancel are idempotent: repeating a transition that already
+ * happened is a no-op (returns false), so client retries and duplicate
+ * payment webhooks get the same answer instead of an error. Conflicting
+ * transitions (confirm a CANCELLED one, cancel a CONFIRMED one) still fail.
+ */
 export class Reservation {
   private constructor(
     readonly id: string,
@@ -84,6 +105,34 @@ export class Reservation {
     return new Date(this.lastUpdatedAt);
   }
 
+  isDueForExpiry(now: Date): boolean {
+    return (
+      this.currentStatus === ReservationStatus.Active &&
+      now.getTime() >= this.expiresAt.getTime()
+    );
+  }
+
+  /** Returns true if the reservation changed, false for an idempotent replay. */
+  confirm(now: Date): boolean {
+    return this.transition(ReservationStatus.Confirmed, 'confirm', now);
+  }
+
+  /** Returns true if the reservation changed, false for an idempotent replay. */
+  cancel(now: Date): boolean {
+    return this.transition(ReservationStatus.Cancelled, 'cancel', now);
+  }
+
+  expire(now: Date): void {
+    if (!this.isDueForExpiry(now)) {
+      throw new InvalidReservationStateError(
+        this.id,
+        this.describeState(now),
+        'expire',
+      );
+    }
+    this.transitionTo(ReservationStatus.Expired, now);
+  }
+
   toSnapshot(): ReservationSnapshot {
     return {
       id: this.id,
@@ -95,5 +144,45 @@ export class Reservation {
       expiresAt: new Date(this.expiresAt),
       updatedAt: new Date(this.lastUpdatedAt),
     };
+  }
+
+  private transition(
+    target: ReservationStatus,
+    action: string,
+    now: Date,
+  ): boolean {
+    if (this.currentStatus === target) {
+      return false; // already done: idempotent replay
+    }
+    this.assertActionable(action, now);
+    this.transitionTo(target, now);
+    return true;
+  }
+
+  private assertActionable(action: string, now: Date): void {
+    if (
+      this.currentStatus === ReservationStatus.Expired ||
+      this.isDueForExpiry(now)
+    ) {
+      throw new ReservationExpiredError(this.id);
+    }
+    if (this.currentStatus !== ReservationStatus.Active) {
+      throw new InvalidReservationStateError(
+        this.id,
+        this.currentStatus,
+        action,
+      );
+    }
+  }
+
+  private describeState(now: Date): string {
+    return this.currentStatus === ReservationStatus.Active
+      ? `ACTIVE until ${this.expiresAt.toISOString()} (now ${now.toISOString()})`
+      : this.currentStatus;
+  }
+
+  private transitionTo(status: ReservationStatus, now: Date): void {
+    this.currentStatus = status;
+    this.lastUpdatedAt = new Date(now);
   }
 }

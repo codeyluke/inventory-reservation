@@ -6,4 +6,6 @@ export const RESERVATION_REPOSITORY = Symbol('RESERVATION_REPOSITORY');
 export interface ReservationRepository {
   findById(id: string): Promise<Reservation | null>;
   save(reservation: Reservation): Promise<void>;
+  /** ACTIVE reservations whose hold window has elapsed at `now`. */
+  findDueForExpiry(now: Date, productId?: string): Promise<Reservation[]>;
 }
