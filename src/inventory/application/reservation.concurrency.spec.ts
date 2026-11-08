@@ -1,16 +1,18 @@
+import { randomUUID } from 'node:crypto';
 import { KeyedMutex } from '../../common/concurrency/keyed-mutex';
 import { LockManager } from '../../common/concurrency/lock-manager';
 import { FakeClock } from '../../testing/fake-clock';
 import { NoOpLockManager } from '../../testing/no-op-lock-manager';
 import {
   InsufficientStockError,
+  IdempotencyKeyMismatchError,
   InvalidReservationStateError,
 } from '../domain/errors';
 import { Product } from '../domain/product';
 import { Reservation, ReservationStatus } from '../domain/reservation';
 import { InMemoryProductRepository } from '../repositories/in-memory-product.repository';
 import { InMemoryReservationRepository } from '../repositories/in-memory-reservation.repository';
-import { ReservationService } from './reservation.service';
+import { ReservationService, type ReserveCommand } from './reservation.service';
 
 const HOLD_MS = 120_000;
 
@@ -43,6 +45,13 @@ describe('ReservationService under concurrency (Level 3)', () => {
     });
   };
 
+  /** Each call is a distinct purchase attempt, so it gets its own key. */
+  const reserve = (
+    command: Omit<ReserveCommand, 'idempotencyKey'> & {
+      idempotencyKey?: string;
+    },
+  ) => service.reserve({ idempotencyKey: randomUUID(), ...command });
+
   const seed = (totalStock: number, id = 'p-1') =>
     products.save(Product.create({ id, name: 'Flash Deal', totalStock }));
 
@@ -69,7 +78,7 @@ describe('ReservationService under concurrency (Level 3)', () => {
     await seed(1);
 
     const results = await fireConcurrently(500, (i) =>
-      service.reserve({ productId: 'p-1', userId: `user-${i}` }),
+      reserve({ productId: 'p-1', userId: `user-${i}` }),
     );
 
     expect(fulfilled(results)).toHaveLength(1);
@@ -85,7 +94,7 @@ describe('ReservationService under concurrency (Level 3)', () => {
     await seed(10);
 
     const results = await fireConcurrently(500, (i) =>
-      service.reserve({ productId: 'p-1', userId: `user-${i}` }),
+      reserve({ productId: 'p-1', userId: `user-${i}` }),
     );
 
     const winners = fulfilled(results);
@@ -97,7 +106,7 @@ describe('ReservationService under concurrency (Level 3)', () => {
     await seed(25);
 
     const results = await fireConcurrently(300, (i) =>
-      service.reserve({
+      reserve({
         productId: 'p-1',
         userId: `user-${i}`,
         quantity: (i % 4) + 1,
@@ -115,7 +124,7 @@ describe('ReservationService under concurrency (Level 3)', () => {
     await seed(1, 'p-2');
 
     const results = await fireConcurrently(500, (i) =>
-      service.reserve({ productId: i % 2 ? 'p-1' : 'p-2', userId: `u-${i}` }),
+      reserve({ productId: i % 2 ? 'p-1' : 'p-2', userId: `u-${i}` }),
     );
 
     const winners = fulfilled(results);
@@ -124,7 +133,7 @@ describe('ReservationService under concurrency (Level 3)', () => {
 
   it('500 simultaneous confirms (retry storm / duplicate webhooks): all succeed, sold once', async () => {
     await seed(1);
-    const { id } = await service.reserve({ productId: 'p-1', userId: 'alice' });
+    const { id } = await reserve({ productId: 'p-1', userId: 'alice' });
 
     const results = await fireConcurrently(500, () => service.confirm(id));
 
@@ -137,10 +146,52 @@ describe('ReservationService under concurrency (Level 3)', () => {
     await expectCountersToMatch([id]);
   });
 
+  it('double-click: 100 simultaneous reserves with one Idempotency-Key hold stock once', async () => {
+    await seed(10);
+
+    const results = await fireConcurrently(100, () =>
+      reserve({
+        productId: 'p-1',
+        userId: 'alice',
+        idempotencyKey: 'click-1',
+      }),
+    );
+
+    const ids = new Set(fulfilled(results).map((r) => r.id));
+    expect(fulfilled(results)).toHaveLength(100);
+    expect(ids.size).toBe(1);
+    await expectCountersToMatch([...ids]);
+  });
+
+  it('one key raced across two products creates exactly one reservation', async () => {
+    await seed(10, 'p-1');
+    await seed(10, 'p-2');
+
+    const results = await fireConcurrently(100, (i) =>
+      reserve({
+        productId: i % 2 ? 'p-1' : 'p-2',
+        userId: 'alice',
+        idempotencyKey: 'click-1',
+      }),
+    );
+
+    const ids = new Set(fulfilled(results).map((r) => r.id));
+    expect(ids.size).toBe(1);
+    expect(
+      rejectionReasons(results).every(
+        (error) => error instanceof IdempotencyKeyMismatchError,
+      ),
+    ).toBe(true);
+    const held =
+      (await products.findById('p-1'))!.reserved +
+      (await products.findById('p-2'))!.reserved;
+    expect(held).toBe(1);
+  });
+
   it('confirm racing cancel on the same reservation: exactly one wins', async () => {
     await seed(2);
-    const target = await service.reserve({ productId: 'p-1', userId: 'a' });
-    const other = await service.reserve({ productId: 'p-1', userId: 'b' });
+    const target = await reserve({ productId: 'p-1', userId: 'a' });
+    const other = await reserve({ productId: 'p-1', userId: 'b' });
 
     const results = await Promise.allSettled([
       service.confirm(target.id),
@@ -156,7 +207,7 @@ describe('ReservationService under concurrency (Level 3)', () => {
 
   it('confirm racing the expiry sweeper: stock is settled exactly once', async () => {
     await seed(1);
-    const { id } = await service.reserve({ productId: 'p-1', userId: 'alice' });
+    const { id } = await reserve({ productId: 'p-1', userId: 'alice' });
     clock.advanceBy(HOLD_MS);
 
     await Promise.allSettled([
@@ -172,11 +223,11 @@ describe('ReservationService under concurrency (Level 3)', () => {
 
   it('after expiry, 500 users race for the released unit: 1 wins', async () => {
     await seed(1);
-    const stale = await service.reserve({ productId: 'p-1', userId: 'early' });
+    const stale = await reserve({ productId: 'p-1', userId: 'early' });
     clock.advanceBy(HOLD_MS);
 
     const results = await fireConcurrently(500, (i) =>
-      service.reserve({ productId: 'p-1', userId: `user-${i}` }),
+      reserve({ productId: 'p-1', userId: `user-${i}` }),
     );
 
     const winners: Reservation[] = fulfilled(results);
@@ -189,8 +240,8 @@ describe('ReservationService under concurrency (Level 3)', () => {
 
     it('confirm and cancel can BOTH succeed, corrupting the stock counters', async () => {
       await seed(2);
-      const target = await service.reserve({ productId: 'p-1', userId: 'a' });
-      await service.reserve({ productId: 'p-1', userId: 'b' });
+      const target = await reserve({ productId: 'p-1', userId: 'a' });
+      await reserve({ productId: 'p-1', userId: 'b' });
 
       const results = await Promise.allSettled([
         service.confirm(target.id),

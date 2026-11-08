@@ -7,6 +7,7 @@ import {
 } from '../../common/concurrency/lock-manager';
 import {
   InsufficientStockError,
+  IdempotencyKeyMismatchError,
   ReservationExpiredError,
   ReservationNotFoundError,
 } from '../domain/errors';
@@ -28,9 +29,16 @@ export interface ReserveCommand {
   productId: string;
   userId: string;
   quantity?: number;
+  /**
+   * Required client key, unique per purchase attempt. Repeating a request
+   * with the same key returns the original reservation.
+   */
+  idempotencyKey: string;
 }
 
 const productLockKey = (productId: string) => `product:${productId}`;
+const idempotencyLockKey = (userId: string, idempotencyKey: string) =>
+  `idempotency:${JSON.stringify([userId, idempotencyKey])}`;
 
 /**
  * Application service orchestrating the reservation lifecycle.
@@ -53,6 +61,12 @@ const productLockKey = (productId: string) => `product:${productId}`;
  *
  * The lock is not re-entrant: private helpers called from inside a locked
  * section must not try to take it again.
+ *
+ * Idempotency: confirm/cancel are idempotent by state (see Reservation).
+ * reserve requires an idempotency key and is idempotent per (userId, key):
+ * the key check and the reservation it creates happen under a lock on that
+ * key, so even duplicates arriving at the same instant create one reservation. Lock order is always
+ * idempotency key -> product, never the reverse, so the two cannot deadlock.
  */
 @Injectable()
 export class ReservationService {
@@ -66,6 +80,32 @@ export class ReservationService {
   ) {}
 
   reserve(command: ReserveCommand): Promise<Reservation> {
+    const { idempotencyKey } = command;
+    const userId = command.userId.trim();
+    return this.lock.runExclusive(
+      idempotencyLockKey(userId, idempotencyKey),
+      async () => {
+        const original = await this.reservations.findByIdempotencyKey(
+          userId,
+          idempotencyKey,
+        );
+        if (!original) {
+          return this.reserveUnderProductLock(command);
+        }
+        const sameRequest =
+          original.productId === command.productId &&
+          original.quantity === (command.quantity ?? 1);
+        if (!sameRequest) {
+          throw new IdempotencyKeyMismatchError(idempotencyKey);
+        }
+        return original; // replay: no new hold
+      },
+    );
+  }
+
+  private reserveUnderProductLock(
+    command: ReserveCommand,
+  ): Promise<Reservation> {
     return this.lock.runExclusive(
       productLockKey(command.productId),
       async () => {
@@ -78,6 +118,7 @@ export class ReservationService {
           quantity: command.quantity ?? 1,
           now,
           holdDurationMs: this.config.holdDurationMs,
+          idempotencyKey: command.idempotencyKey,
         });
 
         await this.reserveStockReclaimingExpired(reservation, now);

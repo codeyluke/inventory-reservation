@@ -6,6 +6,10 @@ import {
 } from '../domain/reservation';
 import { ReservationRepository } from './reservation.repository';
 
+// JSON-encode the pair so no userId/key combination can collide.
+const idempotencyIndexKey = (userId: string, idempotencyKey: string) =>
+  JSON.stringify([userId, idempotencyKey]);
+
 /**
  * Snapshot-based in-memory store; see InMemoryProductRepository.
  *
@@ -16,6 +20,8 @@ import { ReservationRepository } from './reservation.repository';
 export class InMemoryReservationRepository implements ReservationRepository {
   private readonly reservations = new Map<string, ReservationSnapshot>();
   private readonly activeIds = new Set<string>();
+  /** (userId, idempotencyKey) -> reservation id, like a unique DB index. */
+  private readonly idsByIdempotencyKey = new Map<string, string>();
 
   async findById(id: string): Promise<Reservation | null> {
     const snapshot = this.reservations.get(id);
@@ -24,8 +30,22 @@ export class InMemoryReservationRepository implements ReservationRepository {
     );
   }
 
+  async findByIdempotencyKey(
+    userId: string,
+    idempotencyKey: string,
+  ): Promise<Reservation | null> {
+    const id = this.idsByIdempotencyKey.get(
+      idempotencyIndexKey(userId, idempotencyKey),
+    );
+    return id ? this.findById(id) : Promise.resolve(null);
+  }
+
   async save(reservation: Reservation): Promise<void> {
     this.reservations.set(reservation.id, reservation.toSnapshot());
+    this.idsByIdempotencyKey.set(
+      idempotencyIndexKey(reservation.userId, reservation.idempotencyKey),
+      reservation.id,
+    );
     if (reservation.status === ReservationStatus.Active) {
       this.activeIds.add(reservation.id);
     } else {

@@ -1,7 +1,7 @@
 {
   "name": "inventory-reservation",
   "version": "0.0.1",
-  "description": "",
+  "description": "Inventory reservation API that prevents overselling under high concurrency (flash sales).",
   "author": "",
   "private": true,
   "license": "UNLICENSED",
@@ -18,7 +18,9 @@
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test:all": "npm run typecheck && npm run lint:check && npm test && npm run test:e2e",
+    "lint:check": "eslint \"{src,apps,libs,test}/**/*.ts\""
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",

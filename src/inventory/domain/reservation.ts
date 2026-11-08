@@ -21,6 +21,7 @@ export interface ReservationSnapshot {
   createdAt: Date;
   expiresAt: Date;
   updatedAt: Date;
+  idempotencyKey: string;
 }
 
 export interface CreateReservationProps {
@@ -30,6 +31,8 @@ export interface CreateReservationProps {
   quantity: number;
   now: Date;
   holdDurationMs: number;
+  /** Client-supplied key that makes repeated reserve requests safe. */
+  idempotencyKey: string;
 }
 
 /**
@@ -59,6 +62,7 @@ export class Reservation {
     readonly createdAt: Date,
     readonly expiresAt: Date,
     private lastUpdatedAt: Date,
+    readonly idempotencyKey: string,
   ) {}
 
   static create(props: CreateReservationProps): Reservation {
@@ -71,6 +75,9 @@ export class Reservation {
     if (!Number.isFinite(props.holdDurationMs) || props.holdDurationMs <= 0) {
       throw new InvalidArgumentError('Hold duration must be positive.');
     }
+    if (!props.idempotencyKey.trim()) {
+      throw new InvalidArgumentError('Idempotency key is required.');
+    }
     const now = new Date(props.now);
     return new Reservation(
       props.id,
@@ -81,6 +88,7 @@ export class Reservation {
       now,
       new Date(now.getTime() + props.holdDurationMs),
       now,
+      props.idempotencyKey,
     );
   }
 
@@ -94,6 +102,7 @@ export class Reservation {
       new Date(snapshot.createdAt),
       new Date(snapshot.expiresAt),
       new Date(snapshot.updatedAt),
+      snapshot.idempotencyKey,
     );
   }
 
@@ -143,6 +152,7 @@ export class Reservation {
       createdAt: new Date(this.createdAt),
       expiresAt: new Date(this.expiresAt),
       updatedAt: new Date(this.lastUpdatedAt),
+      idempotencyKey: this.idempotencyKey,
     };
   }
 

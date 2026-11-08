@@ -18,6 +18,7 @@ const createReservation = (quantity = 1) =>
     quantity,
     now: T0,
     holdDurationMs: HOLD_MS,
+    idempotencyKey: 'key-1',
   });
 
 describe('Reservation', () => {
@@ -33,6 +34,29 @@ describe('Reservation', () => {
       expect(() => createReservation(quantity)).toThrow(InvalidQuantityError);
     });
 
+    it('records its idempotency key', () => {
+      const reservation = createReservation();
+
+      expect(reservation.idempotencyKey).toBe('key-1');
+      expect(
+        Reservation.fromSnapshot(reservation.toSnapshot()).idempotencyKey,
+      ).toBe('key-1');
+    });
+
+    it('rejects a blank idempotency key', () => {
+      expect(() =>
+        Reservation.create({
+          id: 'r-1',
+          productId: 'p-1',
+          userId: 'alice',
+          quantity: 1,
+          now: T0,
+          holdDurationMs: HOLD_MS,
+          idempotencyKey: '  ',
+        }),
+      ).toThrow(InvalidArgumentError);
+    });
+
     it('rejects a blank user id', () => {
       expect(() =>
         Reservation.create({
@@ -42,6 +66,7 @@ describe('Reservation', () => {
           quantity: 1,
           now: T0,
           holdDurationMs: HOLD_MS,
+          idempotencyKey: 'key-1',
         }),
       ).toThrow(InvalidArgumentError);
     });

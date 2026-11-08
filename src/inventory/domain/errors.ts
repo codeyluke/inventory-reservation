@@ -68,3 +68,13 @@ export class InvalidReservationStateError extends DomainError {
     super(`Cannot ${action} reservation ${reservationId}: it is ${status}.`);
   }
 }
+
+export class IdempotencyKeyMismatchError extends DomainError {
+  readonly code = 'IDEMPOTENCY_KEY_MISMATCH';
+
+  constructor(idempotencyKey: string) {
+    super(
+      `Idempotency key "${idempotencyKey}" was already used for a different reservation request.`,
+    );
+  }
+}

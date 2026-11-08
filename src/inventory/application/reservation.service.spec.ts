@@ -1,10 +1,12 @@
+import { randomUUID } from 'node:crypto';
 import { KeyedMutex } from '../../common/concurrency/keyed-mutex';
 import { FakeClock } from '../../testing/fake-clock';
 import {
   InsufficientStockError,
-  InvalidQuantityError,
-  InvalidReservationStateError,
   ProductNotFoundError,
+  InvalidQuantityError,
+  IdempotencyKeyMismatchError,
+  InvalidReservationStateError,
   ReservationExpiredError,
   ReservationNotFoundError,
 } from '../domain/errors';
@@ -12,7 +14,7 @@ import { Product } from '../domain/product';
 import { ReservationStatus } from '../domain/reservation';
 import { InMemoryProductRepository } from '../repositories/in-memory-product.repository';
 import { InMemoryReservationRepository } from '../repositories/in-memory-reservation.repository';
-import { ReservationService } from './reservation.service';
+import { ReservationService, type ReserveCommand } from './reservation.service';
 
 const HOLD_MS = 2 * 60 * 1000;
 const CONFIG = { holdDurationMs: HOLD_MS, expirySweepIntervalMs: 1000 };
@@ -26,6 +28,13 @@ describe('ReservationService', () => {
   const seedProduct = async (totalStock: number, id = 'p-1') => {
     await products.save(Product.create({ id, name: 'Sneaker', totalStock }));
   };
+
+  /** Each call is a distinct purchase attempt, so it gets its own key. */
+  const reserve = (
+    command: Omit<ReserveCommand, 'idempotencyKey'> & {
+      idempotencyKey?: string;
+    },
+  ) => service.reserve({ idempotencyKey: randomUUID(), ...command });
 
   const stockOf = async (id = 'p-1') => (await products.findById(id))!;
 
@@ -46,7 +55,7 @@ describe('ReservationService', () => {
     it('creates an active reservation that holds stock for 2 minutes', async () => {
       await seedProduct(5);
 
-      const reservation = await service.reserve({
+      const reservation = await reserve({
         productId: 'p-1',
         userId: 'alice',
         quantity: 2,
@@ -65,7 +74,7 @@ describe('ReservationService', () => {
     it('defaults to a quantity of one', async () => {
       await seedProduct(5);
 
-      const reservation = await service.reserve({
+      const reservation = await reserve({
         productId: 'p-1',
         userId: 'alice',
       });
@@ -77,25 +86,25 @@ describe('ReservationService', () => {
       await seedProduct(1);
 
       await expect(
-        service.reserve({ productId: 'p-1', userId: 'A' }),
+        reserve({ productId: 'p-1', userId: 'A' }),
       ).resolves.toBeDefined();
-      await expect(
-        service.reserve({ productId: 'p-1', userId: 'B' }),
-      ).rejects.toThrow(InsufficientStockError);
+      await expect(reserve({ productId: 'p-1', userId: 'B' })).rejects.toThrow(
+        InsufficientStockError,
+      );
     });
 
     it('rejects a reservation exceeding available stock', async () => {
       await seedProduct(3);
 
       await expect(
-        service.reserve({ productId: 'p-1', userId: 'alice', quantity: 4 }),
+        reserve({ productId: 'p-1', userId: 'alice', quantity: 4 }),
       ).rejects.toThrow(InsufficientStockError);
       expect((await stockOf()).available).toBe(3);
     });
 
     it('rejects an unknown product', async () => {
       await expect(
-        service.reserve({ productId: 'missing', userId: 'alice' }),
+        reserve({ productId: 'missing', userId: 'alice' }),
       ).rejects.toThrow(ProductNotFoundError);
     });
 
@@ -103,14 +112,14 @@ describe('ReservationService', () => {
       await seedProduct(3);
 
       await expect(
-        service.reserve({ productId: 'p-1', userId: 'alice', quantity: 0 }),
+        reserve({ productId: 'p-1', userId: 'alice', quantity: 0 }),
       ).rejects.toThrow(InvalidQuantityError);
       expect((await stockOf()).available).toBe(3);
     });
   });
   describe('Level 2: lifecycle', () => {
     const reserveOne = (quantity = 1) =>
-      service.reserve({ productId: 'p-1', userId: 'alice', quantity });
+      reserve({ productId: 'p-1', userId: 'alice', quantity });
 
     describe('confirm', () => {
       it('completes the purchase: reserved stock becomes sold', async () => {
@@ -197,7 +206,7 @@ describe('ReservationService', () => {
         await service.cancel(id);
 
         await expect(
-          service.reserve({ productId: 'p-1', userId: 'bob' }),
+          reserve({ productId: 'p-1', userId: 'bob' }),
         ).resolves.toBeDefined();
       });
 
@@ -264,7 +273,7 @@ describe('ReservationService', () => {
         const { id: stale } = await reserveOne();
         clock.advanceBy(HOLD_MS);
 
-        const fresh = await service.reserve({
+        const fresh = await reserve({
           productId: 'p-1',
           userId: 'bob',
         });
@@ -296,7 +305,7 @@ describe('ReservationService', () => {
         clock.advanceBy(HOLD_MS - 1);
 
         await expect(
-          service.reserve({ productId: 'p-1', userId: 'bob' }),
+          reserve({ productId: 'p-1', userId: 'bob' }),
         ).rejects.toThrow(InsufficientStockError);
       });
     });
@@ -305,6 +314,104 @@ describe('ReservationService', () => {
       await expect(service.getById('missing')).rejects.toThrow(
         ReservationNotFoundError,
       );
+    });
+  });
+
+  describe('Idempotency-Key on reserve', () => {
+    const reserveWithKey = (
+      idempotencyKey: string,
+      overrides: {
+        productId?: string;
+        userId?: string;
+        quantity?: number;
+      } = {},
+    ) =>
+      reserve({
+        productId: 'p-1',
+        userId: 'alice',
+        quantity: 1,
+        idempotencyKey,
+        ...overrides,
+      });
+
+    it('a repeated request returns the original reservation and holds stock once', async () => {
+      await seedProduct(5);
+
+      const first = await reserveWithKey('click-1');
+      const second = await reserveWithKey('click-1');
+
+      expect(second.id).toBe(first.id);
+      expect((await stockOf()).reserved).toBe(1);
+    });
+
+    it('returns the current state of the original reservation', async () => {
+      await seedProduct(5);
+      const first = await reserveWithKey('click-1');
+      await service.confirm(first.id);
+
+      const replay = await reserveWithKey('click-1');
+
+      expect(replay.id).toBe(first.id);
+      expect(replay.status).toBe(ReservationStatus.Confirmed);
+      expect(await stockOf()).toMatchObject({ sold: 1, reserved: 0 });
+    });
+
+    it('replays even when stock has since run out', async () => {
+      await seedProduct(1);
+      const first = await reserveWithKey('click-1');
+
+      await expect(reserveWithKey('click-1')).resolves.toMatchObject({
+        id: first.id,
+      });
+    });
+
+    it('rejects the same key reused for a different product or quantity', async () => {
+      await seedProduct(5);
+      await seedProduct(5, 'p-2');
+      await reserveWithKey('click-1');
+
+      await expect(reserveWithKey('click-1', { quantity: 2 })).rejects.toThrow(
+        IdempotencyKeyMismatchError,
+      );
+      await expect(
+        reserveWithKey('click-1', { productId: 'p-2' }),
+      ).rejects.toThrow(IdempotencyKeyMismatchError);
+      expect((await stockOf()).reserved).toBe(1);
+      expect((await stockOf('p-2')).reserved).toBe(0);
+    });
+
+    it('scopes keys per user', async () => {
+      await seedProduct(5);
+
+      const alice = await reserveWithKey('click-1', { userId: 'alice' });
+      const bob = await reserveWithKey('click-1', { userId: 'bob' });
+
+      expect(bob.id).not.toBe(alice.id);
+      expect((await stockOf()).reserved).toBe(2);
+    });
+
+    it('a failed attempt does not burn the key', async () => {
+      await seedProduct(1);
+      const blocker = await reserveWithKey('other', { userId: 'bob' });
+
+      await expect(reserveWithKey('click-1')).rejects.toThrow(
+        InsufficientStockError,
+      );
+      await service.cancel(blocker.id);
+
+      await expect(reserveWithKey('click-1')).resolves.toMatchObject({
+        status: ReservationStatus.Active,
+      });
+    });
+
+    it('different keys from the same user are separate purchases', async () => {
+      await seedProduct(5);
+
+      const first = await reserveWithKey('click-1');
+      const second = await reserveWithKey('click-2');
+
+      expect(second.id).not.toBe(first.id);
+      expect((await stockOf()).reserved).toBe(2);
     });
   });
 });
