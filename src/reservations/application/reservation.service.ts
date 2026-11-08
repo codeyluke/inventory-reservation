@@ -1,21 +1,21 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import { CLOCK, type Clock } from '../../common/clock/clock';
+import { CLOCK, type Clock } from '../../core/clock/clock';
 import {
   LOCK_MANAGER,
   type LockManager,
-} from '../../common/concurrency/lock-manager';
+} from '../../core/concurrency/lock-manager';
+import { InsufficientStockError } from '../../products/domain/product.errors';
 import {
-  InsufficientStockError,
   IdempotencyKeyMismatchError,
   ReservationExpiredError,
   ReservationNotFoundError,
-} from '../domain/errors';
+} from '../domain/reservation.errors';
 import { Reservation } from '../domain/reservation';
 import {
   PRODUCT_REPOSITORY,
   type ProductRepository,
-} from '../repositories/product.repository';
+} from '../../products/repositories/product.repository';
 import {
   RESERVATION_REPOSITORY,
   type ReservationRepository,

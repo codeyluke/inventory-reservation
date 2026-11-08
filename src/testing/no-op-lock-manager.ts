@@ -1,4 +1,4 @@
-import { LockManager } from '../common/concurrency/lock-manager';
+import { LockManager } from '../core/concurrency/lock-manager';
 
 /** A lock that does nothing: used to prove the real lock is load-bearing. */
 export class NoOpLockManager implements LockManager {

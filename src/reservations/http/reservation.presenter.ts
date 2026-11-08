@@ -1,14 +1,4 @@
-import { Product } from '../domain/product';
 import { Reservation, ReservationStatus } from '../domain/reservation';
-
-export interface ProductResponse {
-  id: string;
-  name: string;
-  totalStock: number;
-  sold: number;
-  reserved: number;
-  available: number;
-}
 
 export interface ReservationResponse {
   id: string;
@@ -20,15 +10,6 @@ export interface ReservationResponse {
   expiresAt: string;
   updatedAt: string;
 }
-
-export const toProductResponse = (product: Product): ProductResponse => ({
-  id: product.id,
-  name: product.name,
-  totalStock: product.totalStock,
-  sold: product.sold,
-  reserved: product.reserved,
-  available: product.available,
-});
 
 export const toReservationResponse = (
   reservation: Reservation,

@@ -1,8 +1,8 @@
+import { InsufficientStockError } from './product.errors';
 import {
-  InsufficientStockError,
   InvalidArgumentError,
   InvalidQuantityError,
-} from './errors';
+} from '../../core/errors/domain-error';
 
 export interface ProductSnapshot {
   id: string;

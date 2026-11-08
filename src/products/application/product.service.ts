@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import { ProductNotFoundError } from '../domain/errors';
+import { ProductNotFoundError } from '../domain/product.errors';
 import { Product } from '../domain/product';
 import {
   PRODUCT_REPOSITORY,

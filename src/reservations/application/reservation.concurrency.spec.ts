@@ -1,16 +1,16 @@
 import { randomUUID } from 'node:crypto';
-import { KeyedMutex } from '../../common/concurrency/keyed-mutex';
-import { LockManager } from '../../common/concurrency/lock-manager';
+import { KeyedMutex } from '../../core/concurrency/keyed-mutex';
+import { LockManager } from '../../core/concurrency/lock-manager';
 import { FakeClock } from '../../testing/fake-clock';
 import { NoOpLockManager } from '../../testing/no-op-lock-manager';
+import { InsufficientStockError } from '../../products/domain/product.errors';
 import {
-  InsufficientStockError,
   IdempotencyKeyMismatchError,
   InvalidReservationStateError,
-} from '../domain/errors';
-import { Product } from '../domain/product';
+} from '../domain/reservation.errors';
+import { Product } from '../../products/domain/product';
 import { Reservation, ReservationStatus } from '../domain/reservation';
-import { InMemoryProductRepository } from '../repositories/in-memory-product.repository';
+import { InMemoryProductRepository } from '../../products/repositories/in-memory-product.repository';
 import { InMemoryReservationRepository } from '../repositories/in-memory-reservation.repository';
 import { ReservationService, type ReserveCommand } from './reservation.service';
 

@@ -1,4 +1,4 @@
-import { ProductNotFoundError } from '../domain/errors';
+import { ProductNotFoundError } from '../domain/product.errors';
 import { InMemoryProductRepository } from '../repositories/in-memory-product.repository';
 import { ProductService } from './product.service';
 

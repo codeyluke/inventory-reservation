@@ -5,7 +5,7 @@ import { Agent } from 'node:http';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from '../src/app.module';
-import { CLOCK } from '../src/common/clock/clock';
+import { CLOCK } from '../src/core/clock/clock';
 import { FakeClock } from '../src/testing/fake-clock';
 
 const HOLD_MS = 120_000;

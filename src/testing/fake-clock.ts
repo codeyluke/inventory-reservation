@@ -1,4 +1,4 @@
-import { Clock } from '../common/clock/clock';
+import { Clock } from '../core/clock/clock';
 
 /** Manually controlled clock for tests. */
 export class FakeClock implements Clock {

@@ -11,7 +11,10 @@ import {
 import { ReservationService } from '../application/reservation.service';
 import { CreateReservationDto } from './dto/create-reservation.dto';
 import { IdempotencyKey } from './idempotency-key.decorator';
-import { ReservationResponse, toReservationResponse } from './presenters';
+import {
+  ReservationResponse,
+  toReservationResponse,
+} from './reservation.presenter';
 
 @Controller('reservations')
 export class ReservationsController {

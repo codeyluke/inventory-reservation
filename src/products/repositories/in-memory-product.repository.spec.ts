@@ -1,8 +1,8 @@
 import {
   InsufficientStockError,
-  InvalidArgumentError,
   ProductNotFoundError,
-} from '../domain/errors';
+} from '../domain/product.errors';
+import { InvalidArgumentError } from '../../core/errors/domain-error';
 import { Product } from '../domain/product';
 import { InMemoryProductRepository } from './in-memory-product.repository';
 

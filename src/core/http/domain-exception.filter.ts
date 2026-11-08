@@ -5,7 +5,7 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import type { Response } from 'express';
-import { DomainError } from '../../inventory/domain/errors';
+import { DomainError } from '../errors/domain-error';
 
 /** Domain error code -> HTTP status. Unlisted codes fall back to 400. */
 const STATUS_BY_CODE: Record<string, HttpStatus> = {

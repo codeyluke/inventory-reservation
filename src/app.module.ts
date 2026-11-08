@@ -1,15 +1,9 @@
 import { Module } from '@nestjs/common';
-import { APP_FILTER, APP_PIPE } from '@nestjs/core';
-import { DomainExceptionFilter } from './common/http/domain-exception.filter';
-import { createValidationPipe } from './common/http/validation.pipe';
-import { InventoryModule } from './inventory/inventory.module';
+import { CoreModule } from './core/core.module';
+import { ProductsModule } from './products/products.module';
+import { ReservationsModule } from './reservations/reservations.module';
 
 @Module({
-  imports: [InventoryModule],
-  providers: [
-    // Registered here (not in main.ts) so tests get the same behaviour.
-    { provide: APP_PIPE, useFactory: createValidationPipe },
-    { provide: APP_FILTER, useClass: DomainExceptionFilter },
-  ],
+  imports: [CoreModule, ProductsModule, ReservationsModule],
 })
 export class AppModule {}

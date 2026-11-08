@@ -82,25 +82,38 @@ curl -s -XPOST localhost:3000/reservations/<reservation-id>/confirm
 
 ```
 src/
-├── common/
-│   ├── clock/          Clock port + SystemClock (time is injectable)
-│   ├── concurrency/    LockManager port + KeyedMutex
-│   └── http/           Validation pipe, domain-error → HTTP filter
-├── inventory/
-│   ├── domain/         Product, Reservation, domain errors (no framework code)
-│   ├── application/    ReservationService, ProductService, expiry scheduler
-│   ├── repositories/   Repository ports + in-memory adapters
-│   ├── http/           Controllers, DTOs, response presenters
-│   └── inventory.module.ts   Wires ports to adapters
-└── testing/            FakeClock, NoOpLockManager (excluded from build)
+├── core/                       CoreModule (global, provided once)
+│   ├── clock/                  Clock port + SystemClock (time is injectable)
+│   ├── concurrency/            LockManager port + KeyedMutex
+│   ├── errors/                 DomainError base class
+│   └── http/                   Validation pipe, domain-error → HTTP filter
+├── products/                   ProductsModule
+│   ├── domain/                 Product aggregate + product errors
+│   ├── application/            ProductService
+│   ├── repositories/           ProductRepository port (atomic stock ops) + in-memory adapter
+│   └── http/                   ProductsController, DTO, presenter
+├── reservations/               ReservationsModule (imports ProductsModule)
+│   ├── domain/                 Reservation state machine + reservation errors
+│   ├── application/            ReservationService, expiry scheduler
+│   ├── repositories/           ReservationRepository port + in-memory adapter
+│   ├── http/                   ReservationsController, DTO, presenter
+│   └── reservation.config.ts   Hold time / sweep interval
+└── testing/                    FakeClock, NoOpLockManager (excluded from build)
 ```
 
+- **One module per feature, with dependencies pointing one way.** `ReservationsModule` imports
+  `ProductsModule` and moves stock only through the exported repository's atomic operations.
+  Products never depend on reservations.
+- **Shared infrastructure is provided exactly once.** `CoreModule` is global and provides the single
+  `LockManager` and `Clock`. This matters for correctness: if a feature module declared its own
+  lock, it would lock independently and the race would come back without any error.
+  `app.module.spec.ts` checks that the app has one shared lock and one shared product store.
 - **The domain layer enforces the rules.** `Product` guards its stock counters and `Reservation`
   guards its state transitions and deadline. Both throw domain errors, so the rules hold no matter
   which caller uses them.
 - **Ports and adapters (dependency inversion).** Services depend on `ProductRepository`,
   `ReservationRepository`, `LockManager` and `Clock` interfaces. Moving to MySQL or Redis means
-  changing a provider in `InventoryModule`, not the services.
+  changing a provider in the feature module, not the services.
 - **The HTTP layer only translates.** Controllers map DTOs to commands and domain objects to
   responses. `DomainExceptionFilter` maps each error `code` to a status.
 
@@ -255,7 +268,7 @@ Time comes from an injected `Clock`, so the 2-minute rules are tested determinis
 ## Testing
 
 ```bash
-npm test          # unit + service-level concurrency tests (115)
+npm test          # unit, wiring and service-level concurrency tests (117)
 npm run test:e2e  # HTTP end-to-end incl. 500 concurrent requests and idempotency (31)
 npm run test:cov  # coverage
 ```
@@ -273,7 +286,10 @@ Level 2, then the race probe and the Level 3 fix, then the API.
 - **One user may hold several reservations.** The brief sets no per-user limit (see improvements).
 - **Cancelling or confirming an expired reservation returns `409 RESERVATION_EXPIRED`** rather than
   quietly succeeding, so the client always knows the hold is gone.
-- **Products are created through the API** with a fixed `totalStock`. Restocking wasn't in scope.
+- **`POST /products` is an addition beyond the brief.** The brief only says inventory lives in
+  memory, so stock has to be set up somehow. An endpoint lets tests and demos create exactly the
+  scenario they need (for example, stock = 1) instead of depending on fixed seed data. Stock is
+  fixed at creation; restocking wasn't in scope.
 
 ## Trade-offs
 

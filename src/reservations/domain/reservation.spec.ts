@@ -1,9 +1,11 @@
 import {
   InvalidArgumentError,
   InvalidQuantityError,
+} from '../../core/errors/domain-error';
+import {
   InvalidReservationStateError,
   ReservationExpiredError,
-} from './errors';
+} from './reservation.errors';
 import { Reservation, ReservationStatus } from './reservation';
 
 const HOLD_MS = 120_000;

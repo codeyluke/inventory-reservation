@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { ProductNotFoundError } from '../domain/errors';
+import { ProductNotFoundError } from '../domain/product.errors';
 import { Product, ProductSnapshot } from '../domain/product';
 import { ProductRepository } from './product.repository';
 
