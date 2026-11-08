@@ -1,3 +1,4 @@
+import { KeyedMutex } from '../../common/concurrency/keyed-mutex';
 import { FakeClock } from '../../testing/fake-clock';
 import {
   InsufficientStockError,
@@ -32,7 +33,13 @@ describe('ReservationService', () => {
     products = new InMemoryProductRepository();
     reservations = new InMemoryReservationRepository();
     clock = new FakeClock();
-    service = new ReservationService(products, reservations, clock, CONFIG);
+    service = new ReservationService(
+      products,
+      reservations,
+      new KeyedMutex(),
+      clock,
+      CONFIG,
+    );
   });
 
   describe('Level 1: reserve', () => {
